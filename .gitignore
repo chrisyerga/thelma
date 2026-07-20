@@ -1,0 +1,49 @@
+# Projects (local media + artifacts)
+projects/*
+!projects/.gitkeep
+
+# Dependencies
+node_modules/
+**/node_modules/
+.venv/
+**/venv/
+packages/scan/.venv/
+
+# Build / Remotion
+dist/
+**/dist/
+packages/video/out/
+packages/video/public/base.mp4
+packages/video/public/media/
+packages/video/public/studio-manifest.json
+*.tsbuildinfo
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+
+# Media
+*.mp4
+*.mov
+*.MOV
+*.wav
+*.mp3
+*.aac
+!packages/media-lib/**/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+packages/scan/models/*.task
+
+# Logs
+*.log
+npm-debug.log*

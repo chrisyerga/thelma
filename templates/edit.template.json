@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "draft",
+  "title": "Draft edit",
+  "fps": 30,
+  "width": 1080,
+  "height": 1920,
+  "platforms": ["universal"],
+  "layoutPreset": "universal",
+  "assets": [],
+  "timeline": [],
+  "cues": [],
+  "subtitle": {
+    "fontFamily": "Montserrat",
+    "fontWeight": 800,
+    "fontSize": 64,
+    "color": "#FFFFFF",
+    "highlightColor": "#FFD400",
+    "outlineColor": "#000000",
+    "outlineWidth": 8,
+    "maxWordsPerChunk": 4,
+    "slot": "captionBand",
+    "censorList": ["fuck", "shit", "cunt", "bitch", "motherfucker", "mutherfucker"]
+  },
+  "audio": {
+    "loudnorm": true,
+    "targetLufs": -16
+  }
+}

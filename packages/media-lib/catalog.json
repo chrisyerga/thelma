@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "id": "whoosh-short",
+      "kind": "sfx",
+      "path": "sfx/whoosh-short.wav",
+      "description": "Short whoosh for graphic entrances"
+    },
+    {
+      "id": "punchline-hit",
+      "kind": "sfx",
+      "path": "sfx/punchline-hit.wav",
+      "description": "Comic hit for punchlines"
+    },
+    {
+      "id": "greenscreen-placeholder",
+      "kind": "greenscreen",
+      "path": "greenscreen/placeholder.mp4",
+      "description": "Drop real keyed / green plates here"
+    }
+  ]
+}

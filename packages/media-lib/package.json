@@ -1,0 +1,6 @@
+{
+  "name": "@thelma/media-lib",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SFX + greenscreen catalog for Thelma cues"
+}

@@ -1,0 +1,30 @@
+{
+  "name": "thelma",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CLI video editing pipeline — scan, story, cut, Remotion polish",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "thelma": "npm run -w @thelma/cli start --",
+    "init": "npm run thelma -- init",
+    "import": "npm run thelma -- import",
+    "scan": "npm run thelma -- scan",
+    "story": "npm run thelma -- story",
+    "cut": "npm run thelma -- cut",
+    "sync": "npm run thelma -- sync",
+    "studio": "npm run thelma -- studio",
+    "render": "npm run thelma -- render",
+    "narrate": "npm run thelma -- narrate",
+    "typecheck": "npm run --workspaces --if-present typecheck"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "typescript": "^5.8.2"
+  }
+}

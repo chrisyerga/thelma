@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "slug": "example",
+  "title": "Example",
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "activeEditId": null,
+  "layoutPreset": "universal",
+  "platforms": ["universal"],
+  "targets": [
+    { "id": "teaser", "maxSec": 30, "label": "Teaser" },
+    { "id": "short", "maxSec": 60, "label": "Short" },
+    { "id": "main", "maxSec": 300, "label": "Main" }
+  ],
+  "fps": 30,
+  "width": 1080,
+  "height": 1920
+}

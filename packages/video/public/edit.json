@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "id": "draft",
+  "title": "Smoke Test",
+  "fps": 30,
+  "width": 1080,
+  "height": 1920,
+  "platforms": [
+    "universal"
+  ],
+  "layoutPreset": "universal",
+  "assets": [
+    {
+      "id": "thelma-smoke",
+      "path": "assets/raw/thelma-smoke.mp4",
+      "durationSec": 3
+    }
+  ],
+  "timeline": [
+    {
+      "id": "c1",
+      "assetId": "thelma-smoke",
+      "srcIn": 0,
+      "srcOut": 2.5,
+      "note": "smoke clip"
+    }
+  ],
+  "cues": [
+    {
+      "id": "title-1",
+      "kind": "overlay",
+      "anchor": {
+        "type": "srcTime",
+        "assetId": "thelma-smoke",
+        "t": 0.2
+      },
+      "durationSec": 1.5,
+      "generator": "TitleCard",
+      "slot": "title",
+      "params": {
+        "title": "SMOKE",
+        "subtitle": "it works"
+      }
+    }
+  ],
+  "subtitle": {
+    "fontFamily": "Montserrat",
+    "fontWeight": 800,
+    "fontSize": 64,
+    "color": "#FFFFFF",
+    "highlightColor": "#FFD400",
+    "outlineColor": "#000000",
+    "outlineWidth": 8,
+    "maxWordsPerChunk": 4,
+    "slot": "captionBand",
+    "censorList": [
+      "fuck"
+    ]
+  },
+  "audio": {
+    "loudnorm": true,
+    "targetLufs": -16
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "editId": "draft",
+  "editHash": "94a77699",
+  "outPath": "/Users/chris/dev/personal/thelma/projects/smoke-test/build/draft/base.mp4",
+  "durationSec": 2.5,
+  "probedDurationSec": 2.517,
+  "fps": 30,
+  "width": 1080,
+  "height": 1920,
+  "segments": [
+    {
+      "timelineId": "c1",
+      "assetId": "thelma-smoke",
+      "srcIn": 0,
+      "srcOut": 2.5,
+      "outStart": 0,
+      "outEnd": 2.5
+    }
+  ]
+}

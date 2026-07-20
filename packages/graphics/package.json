@@ -1,0 +1,27 @@
+{
+  "name": "@thelma/graphics",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "remotion": "^4.0.0"
+  },
+  "dependencies": {
+    "@thelma/shared": "*"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.10",
+    "react": "^19.0.0",
+    "remotion": "4.0.490",
+    "typescript": "^5.8.2"
+  }
+}
