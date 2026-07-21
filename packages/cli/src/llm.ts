@@ -61,3 +61,30 @@ export async function chatCompletion(
   if (!content) throw new Error("Empty LLM response");
   return content;
 }
+
+/** Parse LLM JSON, tolerating ```json … ``` fences and leading/trailing prose. */
+export function parseJsonFromLlm(raw: string): unknown {
+  const trimmed = raw.trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    // fall through
+  }
+
+  const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence?.[1]) {
+    return JSON.parse(fence[1].trim());
+  }
+
+  const objectMatch = trimmed.match(/\{[\s\S]*\}/);
+  if (objectMatch) {
+    return JSON.parse(objectMatch[0]);
+  }
+
+  const arrayMatch = trimmed.match(/\[[\s\S]*\]/);
+  if (arrayMatch) {
+    return JSON.parse(arrayMatch[0]);
+  }
+
+  throw new Error(`LLM did not return JSON: ${trimmed.slice(0, 200)}`);
+}

@@ -19,7 +19,7 @@ import {
   visionPath,
   metaPath,
 } from "@thelma/pipeline";
-import { chatCompletion, llmConfig } from "../llm.js";
+import { chatCompletion, llmConfig, parseJsonFromLlm } from "../llm.js";
 import { projectRoot } from "../root.js";
 import { loadProject, saveProject } from "../project.js";
 
@@ -80,6 +80,9 @@ export async function cmdStory(
     // Also classify verbal meta if transcript exists and meta is empty
     let metaCues = meta?.cues ?? [];
     if (transcript && metaCues.length === 0) {
+      const dur =
+        asset.durationSec != null ? `${asset.durationSec.toFixed(1)}s` : "unknown";
+      console.log(`Classifying meta for ${asset.id} (${dur})…`);
       metaCues = await classifyMeta(transcript.text, transcript.words);
       await writeFile(
         metaPath(root, asset.id),
@@ -89,6 +92,16 @@ export async function cmdStory(
           2,
         ) + "\n",
       );
+      const interesting = metaCues.filter((c) => c.kind !== "content");
+      if (interesting.length === 0) {
+        console.log("  (no non-content meta cues)");
+      } else {
+        for (const c of interesting) {
+          const span = `${c.start.toFixed(1)}–${c.end.toFixed(1)}`;
+          const detail = c.note?.trim() || c.text.trim();
+          console.log(`  ${c.kind} [${span}] ${detail}`);
+        }
+      }
     }
 
     pack.push({
@@ -164,15 +177,7 @@ Prefer source-time anchors. Do not invent assetIds.`;
     { json: true },
   );
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    // try extract JSON block
-    const m = raw.match(/\{[\s\S]*\}/);
-    if (!m) throw new Error("LLM did not return JSON");
-    parsed = JSON.parse(m[0]);
-  }
+  const parsed = parseJsonFromLlm(raw);
 
   const body = parsed as { candidates?: unknown[] };
   const story: StoryCandidates = StoryCandidatesSchema.parse({
@@ -252,9 +257,15 @@ async function classifyMeta(
       [
         {
           role: "system",
-          content: `Classify transcript spans for a video editor. Return JSON:
+          content: `Classify transcript spans for a video editor. Return STRICT JSON only (no markdown fences):
 { "cues": [{ "kind": "content"|"guidance"|"idea_other_video"|"graphic_ask"|"needs_pickup", "start": number, "end": number, "text": string, "confidence": number, "note"?: string }] }
-Use approximate times from the word list. Prefer guidance/graphic_ask/idea_other_video when the speaker is directing the edit or pitching another video.`,
+
+Rules:
+- Use approximate times from the word list.
+- Prefer guidance / graphic_ask / idea_other_video when the speaker is directing the edit or pitching another video.
+- For idea_other_video: note MUST be a concrete standalone-video pitch (topic, angle, hook) inferred from surrounding transcript context — not vague ("references another video"). Example: "Spinoff: how little medical training covers drug efficacy vs pharma sales influence."
+- For graphic_ask: note should say what on-screen graphic to make.
+- Keep "text" as the spoken span; put the actionable pitch/spec in "note".`,
         },
         {
           role: "user",
@@ -263,7 +274,7 @@ Use approximate times from the word list. Prefer guidance/graphic_ask/idea_other
       ],
       { json: true, temperature: 0.2 },
     );
-    const parsed = JSON.parse(raw) as { cues?: unknown[] };
+    const parsed = parseJsonFromLlm(raw) as { cues?: unknown[] };
     return MetaAnalysisSchema.parse({
       assetId: "tmp",
       cues: parsed.cues ?? [],
