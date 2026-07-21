@@ -6,10 +6,12 @@ import {
   EditSchema,
   MetaAnalysisSchema,
   ProjectSchema,
+  SlotNameSchema,
   StoryCandidatesSchema,
   TranscriptSchema,
   VisionAnalysisSchema,
   type Edit,
+  type SlotName,
   type StoryCandidates,
 } from "@thelma/shared";
 import {
@@ -19,9 +21,14 @@ import {
   visionPath,
   metaPath,
 } from "@thelma/pipeline";
+import { ZodError } from "zod";
 import { chatCompletion, llmConfig, parseJsonFromLlm } from "../llm.js";
 import { projectRoot } from "../root.js";
 import { loadProject, saveProject } from "../project.js";
+
+const VALID_SLOTS = new Set<string>(SlotNameSchema.options);
+const DEFAULT_CUE_SLOT: SlotName = "title";
+
 
 async function readJsonSafe<T>(
   file: string,
@@ -152,8 +159,10 @@ Return STRICT JSON matching this shape:
     }
   ]
 }
-Respect project targets. Include side-quest ideas (idea_other_video / graphic_ask meta) as separate candidates when interesting.
-Prefer source-time anchors. Do not invent assetIds.`;
+Rules:
+- Respect project targets. Include side-quest ideas (idea_other_video / graphic_ask meta) as separate candidates when interesting.
+- Prefer source-time anchors. Do not invent assetIds.
+- cue.slot MUST be one of: ${SlotNameSchema.options.join(" | ")}. Never invent slots (no "statistic", "book", "drug", etc). Put semantic labels in params instead.`;
 
   const user = JSON.stringify(
     {
@@ -169,23 +178,50 @@ Prefer source-time anchors. Do not invent assetIds.`;
   );
 
   console.log(`Calling ${llmConfig().model} via OpenRouter…`);
-  const raw = await chatCompletion(
-    [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
-    { json: true },
-  );
 
-  const parsed = parseJsonFromLlm(raw);
+  let story: StoryCandidates;
+  let rawResponse: string | undefined;
+  let parsedBody: unknown;
+  try {
+    rawResponse = await chatCompletion(
+      [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      { json: true },
+    );
 
-  const body = parsed as { candidates?: unknown[] };
-  const story: StoryCandidates = StoryCandidatesSchema.parse({
-    version: 1,
-    generatedAt: new Date().toISOString(),
-    model: llmConfig().model,
-    candidates: body.candidates ?? [],
-  });
+    parsedBody = parseJsonFromLlm(rawResponse);
+    const body = parsedBody as { candidates?: unknown[] };
+    const candidates = sanitizeSuggestedCues(body.candidates ?? []);
+
+    story = StoryCandidatesSchema.parse({
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      model: llmConfig().model,
+      candidates,
+    });
+  } catch (e) {
+    const dumpPath = path.join(paths.story, "candidates.raw.json");
+    try {
+      await writeFile(
+        dumpPath,
+        JSON.stringify(
+          {
+            error: formatStoryError(e).message,
+            parsed: parsedBody ?? null,
+            raw: rawResponse ?? null,
+          },
+          null,
+          2,
+        ) + "\n",
+      );
+      console.error(`Wrote raw LLM output → ${dumpPath}`);
+    } catch {
+      // ignore dump failures
+    }
+    throw formatStoryError(e);
+  }
 
   await writeFile(
     path.join(paths.story, "candidates.json"),
@@ -200,37 +236,41 @@ Prefer source-time anchors. Do not invent assetIds.`;
       if (c.completeness !== "ready" || c.suggestedTimeline.length === 0) {
         continue;
       }
-      const assets = index.assets
-        .filter((a) =>
-          c.suggestedTimeline.some((t) => t.assetId === a.id),
-        )
-        .map((a) => ({
-          id: a.id,
-          path: a.path,
-          durationSec: a.durationSec,
-        }));
+      try {
+        const assets = index.assets
+          .filter((a) =>
+            c.suggestedTimeline.some((t) => t.assetId === a.id),
+          )
+          .map((a) => ({
+            id: a.id,
+            path: a.path,
+            durationSec: a.durationSec,
+          }));
 
-      const edit: Edit = EditSchema.parse({
-        version: 1,
-        id: c.id,
-        title: c.title,
-        fps: project.fps,
-        width: project.width,
-        height: project.height,
-        platforms: project.platforms,
-        layoutPreset: project.layoutPreset,
-        assets,
-        timeline: c.suggestedTimeline,
-        cues: c.suggestedCues,
-        subtitle: {},
-        audio: {},
-      });
+        const edit: Edit = EditSchema.parse({
+          version: 1,
+          id: c.id,
+          title: c.title,
+          fps: project.fps,
+          width: project.width,
+          height: project.height,
+          platforms: project.platforms,
+          layoutPreset: project.layoutPreset,
+          assets,
+          timeline: c.suggestedTimeline,
+          cues: c.suggestedCues,
+          subtitle: {},
+          audio: {},
+        });
 
-      await writeFile(
-        editPath(root, c.id),
-        JSON.stringify(edit, null, 2) + "\n",
-      );
-      console.log(`Materialized edit ${c.id}`);
+        await writeFile(
+          editPath(root, c.id),
+          JSON.stringify(edit, null, 2) + "\n",
+        );
+        console.log(`Materialized edit ${c.id}`);
+      } catch (e) {
+        console.warn(`Failed to materialize edit ${c.id}:`, formatStoryError(e).message);
+      }
     }
 
     const firstReady = story.candidates.find(
@@ -283,6 +323,40 @@ Rules:
     console.warn("Meta classification failed:", e);
     return [];
   }
+}
+
+/** Coerce LLM-invented SafeFrame slots to a valid default. */
+function sanitizeSuggestedCues(candidates: unknown[]): unknown[] {
+  return candidates.map((candidate) => {
+    if (!candidate || typeof candidate !== "object") return candidate;
+    const c = candidate as Record<string, unknown>;
+    if (!Array.isArray(c.suggestedCues)) return candidate;
+    return {
+      ...c,
+      suggestedCues: c.suggestedCues.map((cue) => {
+        if (!cue || typeof cue !== "object") return cue;
+        const q = cue as Record<string, unknown>;
+        if (q.slot == null || VALID_SLOTS.has(String(q.slot))) return q;
+        console.warn(
+          `  Coerced invalid cue slot ${JSON.stringify(q.slot)} → "${DEFAULT_CUE_SLOT}" (${String(q.id ?? "?")})`,
+        );
+        return { ...q, slot: DEFAULT_CUE_SLOT };
+      }),
+    };
+  });
+}
+
+function formatStoryError(e: unknown): Error {
+  if (e instanceof ZodError) {
+    const lines = e.issues.map(
+      (issue) => `  ${issue.path.join(".") || "(root)"}: ${issue.message}`,
+    );
+    return new Error(
+      `Story candidates failed schema validation:\n${lines.join("\n")}`,
+    );
+  }
+  if (e instanceof Error) return e;
+  return new Error(String(e));
 }
 
 function summarizeVision(
