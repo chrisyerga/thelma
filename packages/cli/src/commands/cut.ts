@@ -1,6 +1,7 @@
 import { cutProject } from "@thelma/pipeline";
 import { projectRoot } from "../root.js";
 import {
+  listEditIds,
   loadEditFile,
   loadProject,
   resolveEditId,
@@ -13,6 +14,20 @@ export async function cmdCut(
 ): Promise<void> {
   const root = projectRoot(slug);
   const project = await loadProject(root);
+
+  if (!editIdFlag) {
+    const available = await listEditIds(root);
+    if (available.length === 0) {
+      console.log("No edits found under edits/.");
+    } else {
+      console.log("Available edits:");
+      for (const id of available) {
+        const marker = id === project.activeEditId ? " (active)" : "";
+        console.log(`  - ${id}${marker}`);
+      }
+    }
+  }
+
   const editId = await resolveEditId(root, editIdFlag);
   const edit = await loadEditFile(root, editId);
 
@@ -20,6 +35,10 @@ export async function cmdCut(
     throw new Error(
       `Edit ${editId} has an empty timeline. Add clips before cutting.`,
     );
+  }
+
+  if (!editIdFlag && project.activeEditId) {
+    console.log(`Using active edit: ${editId}`);
   }
 
   console.log(`Cutting ${editId}…`);

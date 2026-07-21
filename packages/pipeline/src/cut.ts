@@ -17,6 +17,7 @@ import {
   totalDuration,
 } from "./remap";
 import { applyFlairToSubtitles, buildSubtitles } from "./subtitles";
+import { refineEditClipBounds } from "./clipBounds";
 import { buildDir, transcriptPath } from "./paths";
 
 export async function loadEdit(editFile: string): Promise<Edit> {
@@ -68,12 +69,25 @@ export async function cutProject(
   const partsDir = path.join(outDir, "parts");
   await mkdir(partsDir, { recursive: true });
 
-  const segments = buildOutputTimeline(edit);
+  const wordsByAsset = await loadWordsByAsset(projectRoot, edit);
+  const { edit: refinedEdit, adjustments } = refineEditClipBounds(
+    edit,
+    wordsByAsset,
+  );
+  for (const a of adjustments) {
+    const dIn = a.srcIn - a.prevIn;
+    const dOut = a.srcOut - a.prevOut;
+    console.log(
+      `  ${a.clipId}: bounds [${a.prevIn.toFixed(2)}–${a.prevOut.toFixed(2)}] → [${a.srcIn.toFixed(2)}–${a.srcOut.toFixed(2)}] (in ${dIn >= 0 ? "+" : ""}${dIn.toFixed(2)}s, out ${dOut >= 0 ? "+" : ""}${dOut.toFixed(2)}s)`,
+    );
+  }
+
+  const segments = buildOutputTimeline(refinedEdit);
   const partPaths: string[] = [];
 
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i]!;
-    const asset = edit.assets.find((a) => a.id === seg.clip.assetId);
+    const asset = refinedEdit.assets.find((a) => a.id === seg.clip.assetId);
     if (!asset) throw new Error(`Unknown asset: ${seg.clip.assetId}`);
     const src = resolveAssetPath(projectRoot, asset.path);
     const partPath = path.join(
@@ -82,14 +96,17 @@ export async function cutProject(
     );
     partPaths.push(partPath);
 
+    const duration = seg.clip.srcOut - seg.clip.srcIn;
+    // Input -ss (fast) + output -t (duration) keeps the full requested length
+    // even when keyframe seek is slightly early; avoids chopping word tails.
     await runFfmpeg([
       "-y",
       "-ss",
       String(seg.clip.srcIn),
-      "-to",
-      String(seg.clip.srcOut),
       "-i",
       src,
+      "-t",
+      String(duration),
       "-vf",
       `scale=${edit.width}:${edit.height}:force_original_aspect_ratio=decrease,pad=${edit.width}:${edit.height}:(ow-iw)/2:(oh-ih)/2,fps=${edit.fps},format=yuv420p`,
       "-c:v",
@@ -143,13 +160,13 @@ export async function cutProject(
   }
 
   const basePath = path.join(outDir, "base.mp4");
-  if (edit.audio.loudnorm) {
+  if (refinedEdit.audio.loudnorm) {
     await runFfmpeg([
       "-y",
       "-i",
       concatOut,
       "-af",
-      `loudnorm=I=${edit.audio.targetLufs}:TP=-1.5:LRA=11`,
+      `loudnorm=I=${refinedEdit.audio.targetLufs}:TP=-1.5:LRA=11`,
       "-c:v",
       "copy",
       "-c:a",
@@ -163,18 +180,18 @@ export async function cutProject(
   }
 
   const probe = await probeMedia(basePath);
-  const theoretical = totalDuration(edit);
-  const editHash = hashEdit(edit);
+  const theoretical = totalDuration(refinedEdit);
+  const editHash = hashEdit(refinedEdit);
 
   const cutMeta: CutMeta = CutMetaSchema.parse({
-    editId: edit.id,
+    editId: refinedEdit.id,
     editHash,
     outPath: basePath,
     durationSec: theoretical,
     probedDurationSec: probe.durationSec,
-    fps: edit.fps,
-    width: edit.width,
-    height: edit.height,
+    fps: refinedEdit.fps,
+    width: refinedEdit.width,
+    height: refinedEdit.height,
     segments: segments.map((s) => ({
       timelineId: s.clip.id,
       assetId: s.clip.assetId,
@@ -190,11 +207,10 @@ export async function cutProject(
     JSON.stringify(cutMeta, null, 2),
   );
 
-  const wordsByAsset = await loadWordsByAsset(projectRoot, edit);
-  let subs = buildSubtitles(edit, wordsByAsset);
+  let subs = buildSubtitles(refinedEdit, wordsByAsset);
 
   const flairByWordId: Record<string, string> = {};
-  for (const cue of edit.cues) {
+  for (const cue of refinedEdit.cues) {
     if (cue.kind === "flair" && cue.anchor.type === "word" && cue.generator) {
       flairByWordId[cue.anchor.wordId] = cue.generator;
     }
@@ -204,18 +220,14 @@ export async function cutProject(
   const subtitlesPath = path.join(outDir, "subtitles.json");
   await writeFile(subtitlesPath, JSON.stringify(subs, null, 2));
 
-  const resolved = resolveCues(edit, wordsByAsset);
+  const resolved = resolveCues(refinedEdit, wordsByAsset);
   const resolvedCuesPath = path.join(outDir, "resolved-cues.json");
   await writeFile(resolvedCuesPath, JSON.stringify(resolved, null, 2));
 
-  // Stamp for Remotion
-  const studioEdit = {
-    ...edit,
-    // Remotion uses resolved overlays; keep full edit for style
-  };
+  // Stamp for Remotion (refined bounds so studio matches the plate)
   await writeFile(
     path.join(outDir, "edit.json"),
-    JSON.stringify(studioEdit, null, 2),
+    JSON.stringify(refinedEdit, null, 2),
   );
 
   return { basePath, cutMeta, subtitlesPath, resolvedCuesPath };
