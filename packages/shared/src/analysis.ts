@@ -52,15 +52,20 @@ export const MetaCueKindSchema = z.enum([
   "idea_other_video",
   "graphic_ask",
   "needs_pickup",
+  "bad_take",
 ]);
+export type MetaCueKind = z.infer<typeof MetaCueKindSchema>;
 
 export const MetaCueSchema = z.object({
+  id: z.string(),
   kind: MetaCueKindSchema,
   start: z.number(),
   end: z.number(),
   text: z.string(),
   confidence: z.number().min(0).max(1).default(0.5),
   note: z.string().optional(),
+  /** When false, story/guide must not use this span in timelines. */
+  keepFootage: z.boolean().default(true),
 });
 
 export const MetaAnalysisSchema = z.object({
@@ -69,6 +74,37 @@ export const MetaAnalysisSchema = z.object({
 });
 export type MetaCue = z.infer<typeof MetaCueSchema>;
 export type MetaAnalysis = z.infer<typeof MetaAnalysisSchema>;
+
+/** Parse meta JSON, upgrading legacy cues that lack id / keepFootage. */
+export function parseMetaAnalysis(raw: unknown): MetaAnalysis {
+  const base = z
+    .object({
+      assetId: z.string(),
+      cues: z.array(z.record(z.string(), z.unknown())).default([]),
+    })
+    .parse(raw);
+
+  const cues = [...base.cues]
+    .sort((a, b) => Number(a.start ?? 0) - Number(b.start ?? 0))
+    .map((c, i) => {
+      const kind = MetaCueKindSchema.catch("content").parse(c.kind);
+      let keepFootage =
+        typeof c.keepFootage === "boolean" ? c.keepFootage : kind !== "bad_take";
+      if (kind === "bad_take") keepFootage = false;
+      return MetaCueSchema.parse({
+        id: typeof c.id === "string" && c.id ? c.id : `cue-${i + 1}`,
+        kind,
+        start: Number(c.start),
+        end: Number(c.end),
+        text: String(c.text ?? ""),
+        confidence: typeof c.confidence === "number" ? c.confidence : 0.5,
+        note: typeof c.note === "string" ? c.note : undefined,
+        keepFootage,
+      });
+    });
+
+  return { assetId: base.assetId, cues };
+}
 
 export const AssetIndexEntrySchema = z.object({
   id: z.string(),

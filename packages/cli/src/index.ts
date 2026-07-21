@@ -3,7 +3,9 @@ import { Command } from "commander";
 import { cmdInit } from "./commands/init.js";
 import { cmdImport } from "./commands/import.js";
 import { cmdScan } from "./commands/scan.js";
+import { cmdReview } from "./commands/review.js";
 import { cmdStory } from "./commands/story.js";
+import { cmdGuide } from "./commands/guide.js";
 import { cmdCut } from "./commands/cut.js";
 import { cmdSync } from "./commands/sync.js";
 import { cmdStudio } from "./commands/studio.js";
@@ -38,25 +40,36 @@ program
 
 program
   .command("scan")
-  .description("Transcribe + vision analysis for project assets")
+  .description("Transcribe + vision + meta classification for project assets")
   .requiredOption("-p, --project <slug>", "project slug")
   .option("--asset <id>", "scan a single asset")
+  .option("--force", "rescan even if analysis is up to date")
   .option("--skip-vision", "skip MediaPipe vision pass")
   .option("--skip-whisper", "skip transcription")
   .action(
     async (opts: {
       project: string;
       asset?: string;
+      force?: boolean;
       skipVision?: boolean;
       skipWhisper?: boolean;
     }) => {
       await cmdScan(requireProjectFlag(opts.project), {
         asset: opts.asset,
+        force: opts.force,
         skipVision: opts.skipVision,
         skipWhisper: opts.skipWhisper,
       });
     },
   );
+
+program
+  .command("review")
+  .description("Burned-in review MP4 of all assets (cue ids + vision)")
+  .requiredOption("-p, --project <slug>", "project slug")
+  .action(async (opts: { project: string }) => {
+    await cmdReview(requireProjectFlag(opts.project));
+  });
 
 program
   .command("story")
@@ -68,6 +81,28 @@ program
       materialize: opts.materialize,
     });
   });
+
+program
+  .command("guide")
+  .description("Patch an edit from natural-language notes (cue/asset refs)")
+  .requiredOption("-p, --project <slug>", "project slug")
+  .option("-e, --edit <id>", "edit id (default: activeEditId)")
+  .option("--notes <text>", "guidance notes")
+  .option("--notes-file <path>", "path to notes markdown/text")
+  .action(
+    async (opts: {
+      project: string;
+      edit?: string;
+      notes?: string;
+      notesFile?: string;
+    }) => {
+      await cmdGuide(requireProjectFlag(opts.project), {
+        edit: opts.edit,
+        notes: opts.notes,
+        notesFile: opts.notesFile,
+      });
+    },
+  );
 
 program
   .command("cut")

@@ -4,13 +4,14 @@ import path from "node:path";
 import {
   AssetIndexSchema,
   EditSchema,
-  MetaAnalysisSchema,
+  parseMetaAnalysis,
   ProjectSchema,
   SlotNameSchema,
   StoryCandidatesSchema,
   TranscriptSchema,
   VisionAnalysisSchema,
   type Edit,
+  type MetaCue,
   type SlotName,
   type StoryCandidates,
 } from "@thelma/shared";
@@ -25,10 +26,10 @@ import { ZodError } from "zod";
 import { chatCompletion, llmConfig, parseJsonFromLlm } from "../llm.js";
 import { projectRoot } from "../root.js";
 import { loadProject, saveProject } from "../project.js";
+import { classifyAndWriteMeta, logInterestingMeta } from "../meta.js";
 
 const VALID_SLOTS = new Set<string>(SlotNameSchema.options);
 const DEFAULT_CUE_SLOT: SlotName = "title";
-
 
 async function readJsonSafe<T>(
   file: string,
@@ -70,7 +71,7 @@ export async function cmdStory(
       end: number;
     }>;
     visionSummary: ReturnType<typeof summarizeVision>;
-    metaCues: unknown[];
+    metaCues: MetaCue[];
   };
   const pack: PackItem[] = [];
   for (const asset of index.assets) {
@@ -81,34 +82,24 @@ export async function cmdStory(
       VisionAnalysisSchema.parse(r),
     );
     const meta = await readJsonSafe(metaPath(root, asset.id), (r) =>
-      MetaAnalysisSchema.parse(r),
+      parseMetaAnalysis(r),
     );
 
-    // Also classify verbal meta if transcript exists and meta is empty
+    // Fallback: classify if scan hasn't written meta yet
     let metaCues = meta?.cues ?? [];
     if (transcript && metaCues.length === 0) {
       const dur =
-        asset.durationSec != null ? `${asset.durationSec.toFixed(1)}s` : "unknown";
+        asset.durationSec != null
+          ? `${asset.durationSec.toFixed(1)}s`
+          : "unknown";
       console.log(`Classifying meta for ${asset.id} (${dur})…`);
-      metaCues = await classifyMeta(transcript.text, transcript.words);
-      await writeFile(
-        metaPath(root, asset.id),
-        JSON.stringify(
-          MetaAnalysisSchema.parse({ assetId: asset.id, cues: metaCues }),
-          null,
-          2,
-        ) + "\n",
+      metaCues = await classifyAndWriteMeta(
+        root,
+        asset.id,
+        transcript.text,
+        transcript.words,
       );
-      const interesting = metaCues.filter((c) => c.kind !== "content");
-      if (interesting.length === 0) {
-        console.log("  (no non-content meta cues)");
-      } else {
-        for (const c of interesting) {
-          const span = `${c.start.toFixed(1)}–${c.end.toFixed(1)}`;
-          const detail = c.note?.trim() || c.text.trim();
-          console.log(`  ${c.kind} [${span}] ${detail}`);
-        }
-      }
+      logInterestingMeta(metaCues);
     }
 
     pack.push({
@@ -162,7 +153,9 @@ Return STRICT JSON matching this shape:
 Rules:
 - Respect project targets. Include side-quest ideas (idea_other_video / graphic_ask meta) as separate candidates when interesting.
 - Prefer source-time anchors. Do not invent assetIds.
-- cue.slot MUST be one of: ${SlotNameSchema.options.join(" | ")}. Never invent slots (no "statistic", "book", "drug", etc). Put semantic labels in params instead.`;
+- cue.slot MUST be one of: ${SlotNameSchema.options.join(" | ")}. Never invent slots (no "statistic", "book", "drug", etc). Put semantic labels in params instead.
+- Meta cues with keepFootage=false (including all bad_take) MUST NOT appear in suggestedTimeline. Skip those source spans entirely.
+- graphic_ask and idea_other_video are annotations: the spoken words remain usable. Use them for overlays / side-quest candidates, not as a reason to omit the speech.`;
 
   const user = JSON.stringify(
     {
@@ -269,7 +262,10 @@ Rules:
         );
         console.log(`Materialized edit ${c.id}`);
       } catch (e) {
-        console.warn(`Failed to materialize edit ${c.id}:`, formatStoryError(e).message);
+        console.warn(
+          `Failed to materialize edit ${c.id}:`,
+          formatStoryError(e).message,
+        );
       }
     }
 
@@ -285,44 +281,6 @@ Rules:
   console.log(
     `Wrote ${story.candidates.length} candidates → story/candidates.json + story/summary.md`,
   );
-}
-
-async function classifyMeta(
-  text: string,
-  words: Array<{ wordId: string; word: string; start: number; end: number }>,
-) {
-  if (!text.trim()) return [];
-  try {
-    const raw = await chatCompletion(
-      [
-        {
-          role: "system",
-          content: `Classify transcript spans for a video editor. Return STRICT JSON only (no markdown fences):
-{ "cues": [{ "kind": "content"|"guidance"|"idea_other_video"|"graphic_ask"|"needs_pickup", "start": number, "end": number, "text": string, "confidence": number, "note"?: string }] }
-
-Rules:
-- Use approximate times from the word list.
-- Prefer guidance / graphic_ask / idea_other_video when the speaker is directing the edit or pitching another video.
-- For idea_other_video: note MUST be a concrete standalone-video pitch (topic, angle, hook) inferred from surrounding transcript context — not vague ("references another video"). Example: "Spinoff: how little medical training covers drug efficacy vs pharma sales influence."
-- For graphic_ask: note should say what on-screen graphic to make.
-- Keep "text" as the spoken span; put the actionable pitch/spec in "note".`,
-        },
-        {
-          role: "user",
-          content: JSON.stringify({ text, words: words.slice(0, 300) }),
-        },
-      ],
-      { json: true, temperature: 0.2 },
-    );
-    const parsed = parseJsonFromLlm(raw) as { cues?: unknown[] };
-    return MetaAnalysisSchema.parse({
-      assetId: "tmp",
-      cues: parsed.cues ?? [],
-    }).cues;
-  } catch (e) {
-    console.warn("Meta classification failed:", e);
-    return [];
-  }
 }
 
 /** Coerce LLM-invented SafeFrame slots to a valid default. */
@@ -360,7 +318,12 @@ function formatStoryError(e: unknown): Error {
 }
 
 function summarizeVision(
-  events: Array<{ type: string; start: number; end: number; confidence: number }>,
+  events: Array<{
+    type: string;
+    start: number;
+    end: number;
+    confidence: number;
+  }>,
 ) {
   const byType: Record<string, number> = {};
   for (const e of events) {
@@ -403,7 +366,9 @@ function renderSummaryMd(
     lines.push("");
     lines.push("### Beats");
     for (const b of c.beats) {
-      lines.push(`- **${b.id}**: ${b.summary}${b.approxSec ? ` (~${b.approxSec}s)` : ""}`);
+      lines.push(
+        `- **${b.id}**: ${b.summary}${b.approxSec ? ` (~${b.approxSec}s)` : ""}`,
+      );
     }
     if (c.graphicIdeas.length) {
       lines.push("");
