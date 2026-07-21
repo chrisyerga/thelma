@@ -4,6 +4,20 @@ import { existsSync } from "node:fs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Directory the user invoked npm from.
+ * `npm run -w @thelma/cli` sets cwd to packages/cli, so process.cwd() is wrong
+ * for relative paths the user typed at the repo root. npm sets INIT_CWD.
+ */
+export function userCwd(): string {
+  return process.env.INIT_CWD || process.cwd();
+}
+
+/** Resolve a user-supplied path (absolute stays absolute; relative → userCwd). */
+export function resolveUserPath(p: string): string {
+  return path.isAbsolute(p) ? p : path.resolve(userCwd(), p);
+}
+
 /** Repo root (thelma/), walking up from this package. */
 export function repoRoot(): string {
   if (process.env.THELMA_ROOT) {

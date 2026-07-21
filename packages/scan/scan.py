@@ -7,6 +7,7 @@ import argparse
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -16,6 +17,12 @@ from typing import Any
 
 
 MODELS_DIR = Path(__file__).resolve().parent / "models"
+
+# Near-zero word durations mark Whisper end-of-audio hallucination loops.
+_COLLAPSED_WORD_DUR = 0.03
+_COLLAPSED_AVG_DUR = 0.05
+_COLLAPSED_SPAN_PER_WORD = 0.05
+_COLLAPSED_ZERO_FRAC = 0.5
 
 
 def word_id(i: int) -> str:
@@ -28,6 +35,125 @@ def _has_module(name: str) -> bool:
         return True
     except ImportError:
         return False
+
+
+def _norm_token(word: str) -> str:
+    return re.sub(r"[^\w']+", "", word.lower())
+
+
+def _word_dur(w: dict[str, Any]) -> float:
+    return max(0.0, float(w["end"]) - float(w["start"]))
+
+
+def _phrase_span(words: list[dict[str, Any]]) -> float:
+    if not words:
+        return 0.0
+    return max(0.0, float(words[-1]["end"]) - float(words[0]["start"]))
+
+
+def _is_collapsed(words: list[dict[str, Any]]) -> bool:
+    """True when timings look like a Whisper loop (mostly zero-length words)."""
+    if not words:
+        return True
+    zeros = sum(1 for w in words if _word_dur(w) < _COLLAPSED_WORD_DUR)
+    avg = sum(_word_dur(w) for w in words) / len(words)
+    span = _phrase_span(words)
+    return (
+        zeros / len(words) >= _COLLAPSED_ZERO_FRAC
+        or avg < _COLLAPSED_AVG_DUR
+        or span < len(words) * _COLLAPSED_SPAN_PER_WORD
+    )
+
+
+def _collapse_repeat_loops_once(
+    words: list[dict[str, Any]],
+    *,
+    min_phrase: int = 2,
+    max_phrase: int = 12,
+) -> list[dict[str, Any]]:
+    """Keep the first copy of a repeated phrase; drop later collapsed/runaway copies.
+
+    Real retakes (normal word durations, spaced apart) are left alone because they
+    are not consecutive identical phrases with collapsed timings.
+    """
+    out: list[dict[str, Any]] = []
+    i = 0
+    n = len(words)
+    while i < n:
+        matched = False
+        upper = min(max_phrase, (n - i) // 2)
+        for length in range(upper, min_phrase - 1, -1):
+            first = words[i : i + length]
+            first_key = tuple(_norm_token(w["word"]) for w in first)
+            if any(not token for token in first_key):
+                continue
+
+            copies = 1
+            j = i + length
+            while j + length <= n:
+                nxt_key = tuple(
+                    _norm_token(w["word"]) for w in words[j : j + length]
+                )
+                if nxt_key != first_key:
+                    break
+                copies += 1
+                j += length
+
+            if copies < 2:
+                continue
+
+            later_collapsed = any(
+                _is_collapsed(words[i + k * length : i + (k + 1) * length])
+                for k in range(1, copies)
+            )
+            runaway = copies >= 3
+            if later_collapsed or runaway:
+                out.extend(first)
+                i = j
+                matched = True
+                break
+
+        if not matched:
+            out.append(words[i])
+            i += 1
+    return out
+
+
+def _trim_trailing_collapsed(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop a trailing run of near-zero-duration words (common end-of-clip junk)."""
+    if len(words) < 2:
+        return words
+    i = len(words)
+    while i > 0 and _word_dur(words[i - 1]) < _COLLAPSED_WORD_DUR:
+        i -= 1
+    trailing = words[i:]
+    if len(trailing) >= 2 and _is_collapsed(trailing):
+        return words[:i]
+    return words
+
+
+def clean_whisper_words(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove Whisper hallucination loops; preserve real multi-take speech."""
+    cleaned = words
+    for _ in range(8):
+        nxt = _collapse_repeat_loops_once(cleaned)
+        if len(nxt) == len(cleaned):
+            break
+        cleaned = nxt
+    return _trim_trailing_collapsed(cleaned)
+
+
+def _reindex_words(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for i, w in enumerate(words):
+        item = dict(w)
+        item["wordId"] = word_id(i)
+        out.append(item)
+    return out
+
+
+def _text_from_words(words: list[dict[str, Any]]) -> str:
+    return " ".join(w["word"] for w in words).strip()
 
 
 def run_whisper(media: Path, asset_id: str, out_path: Path, model: str) -> None:
@@ -89,8 +215,6 @@ def run_whisper(media: Path, asset_id: str, out_path: Path, model: str) -> None:
         raw = json.loads(jsons[0].read_text())
 
     words: list[dict[str, Any]] = []
-    text = raw.get("text") or ""
-    idx = 0
 
     if raw.get("words"):
         for w in raw["words"]:
@@ -99,14 +223,12 @@ def run_whisper(media: Path, asset_id: str, out_path: Path, model: str) -> None:
                 continue
             words.append(
                 {
-                    "wordId": word_id(idx),
                     "word": token,
                     "start": float(w["start"]),
                     "end": float(w["end"]),
                     "probability": w.get("probability"),
                 }
             )
-            idx += 1
     else:
         for seg in raw.get("segments") or []:
             for w in seg.get("words") or []:
@@ -115,20 +237,23 @@ def run_whisper(media: Path, asset_id: str, out_path: Path, model: str) -> None:
                     continue
                 words.append(
                     {
-                        "wordId": word_id(idx),
                         "word": token,
                         "start": float(w["start"]),
                         "end": float(w["end"]),
                         "probability": w.get("probability"),
                     }
                 )
-                idx += 1
+
+    raw_count = len(words)
+    words = _reindex_words(clean_whisper_words(words))
+    removed = raw_count - len(words)
+    text = _text_from_words(words)
 
     out_path.write_text(
         json.dumps(
             {
                 "assetId": asset_id,
-                "text": text.strip(),
+                "text": text,
                 "language": raw.get("language"),
                 "words": words,
                 "source": "mlx_whisper",
@@ -137,7 +262,10 @@ def run_whisper(media: Path, asset_id: str, out_path: Path, model: str) -> None:
         )
         + "\n"
     )
-    print(f"  wrote transcript ({len(words)} words)")
+    if removed:
+        print(f"  wrote transcript ({len(words)} words, removed {removed} loop/collapsed)")
+    else:
+        print(f"  wrote transcript ({len(words)} words)")
 
 
 def ear(landmarks: list[Any], idxs: list[int]) -> float:
