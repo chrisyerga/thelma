@@ -62,6 +62,7 @@ export async function cmdStory(
 
   type PackItem = {
     assetId: string;
+    mediaKind?: string;
     durationSec?: number;
     transcriptText: string;
     words: Array<{
@@ -104,6 +105,7 @@ export async function cmdStory(
 
     pack.push({
       assetId: asset.id,
+      mediaKind: asset.mediaKind ?? "video",
       durationSec: asset.durationSec,
       transcriptText: transcript?.text ?? "",
       words: (transcript?.words ?? []).slice(0, 400).map((w) => ({
@@ -155,7 +157,8 @@ Rules:
 - Prefer source-time anchors. Do not invent assetIds.
 - cue.slot MUST be one of: ${SlotNameSchema.options.join(" | ")}. Never invent slots (no "statistic", "book", "drug", etc). Put semantic labels in params instead.
 - Meta cues with keepFootage=false (including all bad_take) MUST NOT appear in suggestedTimeline. Skip those source spans entirely.
-- graphic_ask and idea_other_video are annotations: the spoken words remain usable. Use them for overlays / side-quest candidates, not as a reason to omit the speech.`;
+- graphic_ask and idea_other_video are annotations: the spoken words remain usable. Use them for overlays / side-quest candidates, not as a reason to omit the speech.
+- Assets with mediaKind "image" or "audio" are support media (not talking-head footage). Prefer them as overlay/fullscreen/sfx cues via mediaRef=<assetId> (no generator), not as long timeline clips. Still holds on the timeline are OK only when intentional (short srcIn/srcOut within durationSec).`;
 
   const user = JSON.stringify(
     {
@@ -238,6 +241,7 @@ Rules:
             id: a.id,
             path: a.path,
             durationSec: a.durationSec,
+            mediaKind: a.mediaKind,
           }));
 
         const edit: Edit = EditSchema.parse({

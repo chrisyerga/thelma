@@ -31,12 +31,26 @@ program
 
 program
   .command("import")
-  .description("Copy media into a project and register assets")
+  .description(
+    "Copy media into a project and register assets (video, still images, audio)",
+  )
   .requiredOption("-p, --project <slug>", "project slug")
-  .argument("<files...>", "media files to import")
-  .action(async (files: string[], opts: { project: string }) => {
-    await cmdImport(requireProjectFlag(opts.project), files);
-  });
+  .option(
+    "--duration <seconds>",
+    "hold duration for still images (default 3)",
+    (v) => Number(v),
+  )
+  .argument("<files...>", "media files to import (video / image / audio)")
+  .action(
+    async (
+      files: string[],
+      opts: { project: string; duration?: number },
+    ) => {
+      await cmdImport(requireProjectFlag(opts.project), files, {
+        duration: opts.duration,
+      });
+    },
+  );
 
 program
   .command("scan")

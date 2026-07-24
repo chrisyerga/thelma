@@ -106,10 +106,18 @@ export function parseMetaAnalysis(raw: unknown): MetaAnalysis {
   return { assetId: base.assetId, cues };
 }
 
+export const MediaKindSchema = z.enum(["video", "audio", "image"]);
+export type MediaKind = z.infer<typeof MediaKindSchema>;
+
+/** Default hold length when importing a still (review / timeline). */
+export const DEFAULT_IMAGE_DURATION_SEC = 3;
+
 export const AssetIndexEntrySchema = z.object({
   id: z.string(),
   filename: z.string(),
   path: z.string(),
+  /** video | audio | image — inferred on import from ffprobe + extension */
+  mediaKind: MediaKindSchema.optional(),
   durationSec: z.number().optional(),
   width: z.number().optional(),
   height: z.number().optional(),

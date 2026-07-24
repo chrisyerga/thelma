@@ -7,7 +7,9 @@ import {
   type MetaCue,
   type VisionEvent,
 } from "@thelma/shared";
-import { runFfmpeg, probeMedia } from "./ffmpeg";
+import { DEFAULT_IMAGE_DURATION_SEC, type MediaKind } from "@thelma/shared";
+import { runFfmpeg, probeMedia, encodeTimelinePart } from "./ffmpeg";
+import { classifyMediaKind } from "./mediaKind";
 import { metaPath, visionPath } from "./paths";
 
 export type ReviewSegment = {
@@ -168,7 +170,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 export async function buildReviewPlate(opts: {
   projectRoot: string;
-  assets: Array<{ id: string; path: string; durationSec?: number }>;
+  assets: Array<{
+    id: string;
+    path: string;
+    durationSec?: number;
+    mediaKind?: MediaKind;
+  }>;
   width: number;
   height: number;
   fps: number;
@@ -197,7 +204,12 @@ export async function buildReviewPlate(opts: {
     }
 
     const probe = await probeMedia(mediaPath);
-    const durationSec = asset.durationSec ?? probe.durationSec;
+    const mediaKind =
+      asset.mediaKind ?? classifyMediaKind(probe, mediaPath);
+    let durationSec = asset.durationSec ?? probe.durationSec;
+    if (mediaKind === "image" && !(durationSec > 0.5)) {
+      durationSec = DEFAULT_IMAGE_DURATION_SEC;
+    }
     if (!(durationSec > 0)) {
       throw new Error(`Invalid duration for ${asset.id}`);
     }
@@ -237,38 +249,19 @@ export async function buildReviewPlate(opts: {
 
     const partPath = path.join(workDir, partName);
     // Relative ASS filename + cwd=workDir avoids filtergraph path/quoting bugs.
-    const vf = `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,fps=${fps},format=yuv420p,ass=${assName}`;
-    const args = [
-      "-y",
-      "-i",
-      mediaPath,
-      "-t",
-      String(durationSec),
-      "-vf",
-      vf,
-      "-c:v",
-      "libx264",
-      "-preset",
-      "fast",
-      "-crf",
-      "20",
-    ];
-    if (probe.hasAudio) {
-      args.push(
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
-        "-ar",
-        "48000",
-        "-ac",
-        "2",
-      );
-    } else {
-      args.push("-an");
-    }
-    args.push(partName);
-    await runFfmpeg(args, workDir);
+    await encodeTimelinePart({
+      src: mediaPath,
+      outPath: partName,
+      srcIn: 0,
+      durationSec,
+      width,
+      height,
+      fps,
+      mediaKind,
+      hasAudio: probe.hasAudio,
+      cwd: workDir,
+      vfExtra: `ass=${assName}`,
+    });
 
     partPaths.push(partPath);
     segments.push({

@@ -30,6 +30,7 @@ export async function cmdReview(slug: string): Promise<void> {
       id: a.id,
       path: a.path,
       durationSec: a.durationSec,
+      mediaKind: a.mediaKind,
     })),
     width: project.width,
     height: project.height,

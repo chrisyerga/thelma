@@ -8,8 +8,10 @@ import {
 import {
   projectPaths,
   slugify,
+  probeMedia,
+  classifyMediaKind,
+  durationForImport,
 } from "@thelma/pipeline";
-import { probeMedia } from "@thelma/pipeline";
 import { projectRoot, resolveUserPath } from "../root.js";
 import { loadProject } from "../project.js";
 
@@ -21,6 +23,7 @@ function assetIdFromFilename(filename: string): string {
 export async function cmdImport(
   slug: string,
   files: string[],
+  opts?: { duration?: number },
 ): Promise<void> {
   if (files.length === 0) throw new Error("No files to import");
 
@@ -50,19 +53,26 @@ export async function cmdImport(
     await copyFile(abs, dest);
 
     const probe = await probeMedia(dest);
+    const mediaKind = classifyMediaKind(probe, dest);
+    const durationSec = durationForImport(
+      mediaKind,
+      probe.durationSec,
+      opts?.duration,
+    );
     const existing = byFilename.get(filename);
 
     if (existing) {
       // Idempotent re-import: refresh probe metadata, keep stable id
       existing.path = path.relative(root, dest);
-      existing.durationSec = probe.durationSec;
+      existing.mediaKind = mediaKind;
+      existing.durationSec = durationSec;
       existing.width = probe.width;
       existing.height = probe.height;
-      existing.fps = probe.fps;
+      existing.fps = mediaKind === "image" ? undefined : probe.fps;
       existing.hasAudio = probe.hasAudio;
       existing.importedAt = new Date().toISOString();
       console.log(
-        `Updated ${filename} → ${existing.id} (${probe.durationSec.toFixed(1)}s)`,
+        `Updated ${filename} → ${existing.id} [${mediaKind}] (${durationSec.toFixed(1)}s)`,
       );
       continue;
     }
@@ -77,10 +87,11 @@ export async function cmdImport(
       id,
       filename,
       path: path.relative(root, dest),
-      durationSec: probe.durationSec,
+      mediaKind,
+      durationSec,
       width: probe.width,
       height: probe.height,
-      fps: probe.fps,
+      fps: mediaKind === "image" ? undefined : probe.fps,
       hasAudio: probe.hasAudio,
       importedAt: new Date().toISOString(),
     };
@@ -88,7 +99,9 @@ export async function cmdImport(
     index.assets.push(entry);
     byFilename.set(filename, entry);
     existingIds.add(id);
-    console.log(`Imported ${filename} → ${id} (${probe.durationSec.toFixed(1)}s)`);
+    console.log(
+      `Imported ${filename} → ${id} [${mediaKind}] (${durationSec.toFixed(1)}s)`,
+    );
   }
 
   await writeFile(

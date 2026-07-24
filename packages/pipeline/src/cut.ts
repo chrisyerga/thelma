@@ -9,7 +9,8 @@ import {
   type Edit,
   type TranscriptWord,
 } from "@thelma/shared";
-import { runFfmpeg, probeMedia } from "./ffmpeg";
+import { runFfmpeg, probeMedia, encodeTimelinePart } from "./ffmpeg";
+import { classifyMediaKind } from "./mediaKind";
 import {
   buildOutputTimeline,
   hashEdit,
@@ -97,34 +98,22 @@ export async function cutProject(
     partPaths.push(partPath);
 
     const duration = seg.clip.srcOut - seg.clip.srcIn;
+    const probe = await probeMedia(src);
+    const mediaKind =
+      asset.mediaKind ?? classifyMediaKind(probe, src);
     // Input -ss (fast) + output -t (duration) keeps the full requested length
     // even when keyframe seek is slightly early; avoids chopping word tails.
-    await runFfmpeg([
-      "-y",
-      "-ss",
-      String(seg.clip.srcIn),
-      "-i",
+    await encodeTimelinePart({
       src,
-      "-t",
-      String(duration),
-      "-vf",
-      `scale=${edit.width}:${edit.height}:force_original_aspect_ratio=decrease,pad=${edit.width}:${edit.height}:(ow-iw)/2:(oh-ih)/2,fps=${edit.fps},format=yuv420p`,
-      "-c:v",
-      "libx264",
-      "-preset",
-      "fast",
-      "-crf",
-      "18",
-      "-c:a",
-      "aac",
-      "-b:a",
-      "192k",
-      "-ar",
-      "48000",
-      "-ac",
-      "2",
-      partPath,
-    ]);
+      outPath: partPath,
+      srcIn: mediaKind === "image" ? 0 : seg.clip.srcIn,
+      durationSec: duration,
+      width: edit.width,
+      height: edit.height,
+      fps: edit.fps,
+      mediaKind,
+      hasAudio: probe.hasAudio,
+    });
   }
 
   const listPath = path.join(outDir, "concat.txt");

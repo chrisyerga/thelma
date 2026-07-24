@@ -65,11 +65,16 @@ export type MediaProbe = {
   height?: number;
   fps?: number;
   hasAudio: boolean;
+  hasVideo: boolean;
+  videoCodec?: string;
+  formatName?: string;
 };
 
 export async function probeMedia(filePath: string): Promise<MediaProbe> {
   const data = await runFfprobeJson(filePath);
-  const format = data.format as { duration?: string } | undefined;
+  const format = data.format as
+    | { duration?: string; format_name?: string }
+    | undefined;
   const streams = (data.streams as Array<Record<string, unknown>>) ?? [];
   const video = streams.find((s) => s.codec_type === "video");
   const audio = streams.find((s) => s.codec_type === "audio");
@@ -86,5 +91,140 @@ export async function probeMedia(filePath: string): Promise<MediaProbe> {
     height: typeof video?.height === "number" ? video.height : undefined,
     fps,
     hasAudio: Boolean(audio),
+    hasVideo: Boolean(video),
+    videoCodec:
+      typeof video?.codec_name === "string" ? video.codec_name : undefined,
+    formatName: format?.format_name,
   };
+}
+
+/**
+ * Encode a source segment to a normalized H.264 (+ optional AAC) part.
+ * Handles still images (-loop) and audio-only (black video + audio).
+ */
+export async function encodeTimelinePart(opts: {
+  src: string;
+  outPath: string;
+  srcIn: number;
+  durationSec: number;
+  width: number;
+  height: number;
+  fps: number;
+  mediaKind?: "video" | "audio" | "image";
+  hasAudio?: boolean;
+  cwd?: string;
+  /** Extra video filter chain segment(s), appended after scale/pad/fps/format */
+  vfExtra?: string;
+}): Promise<void> {
+  const {
+    src,
+    outPath,
+    srcIn,
+    durationSec,
+    width,
+    height,
+    fps,
+    mediaKind = "video",
+    hasAudio,
+    cwd,
+    vfExtra,
+  } = opts;
+
+  const scalePad = `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,fps=${fps},format=yuv420p`;
+  const vf = vfExtra ? `${scalePad},${vfExtra}` : scalePad;
+
+  if (mediaKind === "image") {
+    await runFfmpeg(
+      [
+        "-y",
+        "-loop",
+        "1",
+        "-framerate",
+        String(fps),
+        "-i",
+        src,
+        "-t",
+        String(durationSec),
+        "-vf",
+        vf,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "18",
+        "-an",
+        outPath,
+      ],
+      cwd,
+    );
+    return;
+  }
+
+  if (mediaKind === "audio") {
+    const videoVf = vfExtra
+      ? `fps=${fps},format=yuv420p,${vfExtra}`
+      : `fps=${fps},format=yuv420p`;
+    await runFfmpeg(
+      [
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        `color=c=black:s=${width}x${height}:r=${fps}`,
+        "-ss",
+        String(srcIn),
+        "-i",
+        src,
+        "-t",
+        String(durationSec),
+        "-vf",
+        videoVf,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "18",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-shortest",
+        outPath,
+      ],
+      cwd,
+    );
+    return;
+  }
+
+  // video
+  const args = [
+    "-y",
+    "-ss",
+    String(srcIn),
+    "-i",
+    src,
+    "-t",
+    String(durationSec),
+    "-vf",
+    vf,
+    "-c:v",
+    "libx264",
+    "-preset",
+    "fast",
+    "-crf",
+    "18",
+  ];
+  if (hasAudio !== false) {
+    args.push("-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2");
+  } else {
+    args.push("-an");
+  }
+  args.push(outPath);
+  await runFfmpeg(args, cwd);
 }

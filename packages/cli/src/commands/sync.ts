@@ -130,6 +130,19 @@ async function syncCueMedia(
           // also alias by mediaRef for CueLayer lookup
           await copyFile(abs, path.join(mediaPublic, cue.mediaRef));
         }
+      } else {
+        // Project asset id → copy raw media for still/audio overlays
+        const asset = edit.assets.find((a) => a.id === cue.mediaRef);
+        if (asset) {
+          const abs = path.isAbsolute(asset.path)
+            ? asset.path
+            : path.resolve(projectRootPath, asset.path);
+          if (existsSync(abs)) {
+            const base = path.basename(abs);
+            await copyFile(abs, path.join(mediaPublic, base));
+            await copyFile(abs, path.join(mediaPublic, cue.mediaRef));
+          }
+        }
       }
     }
   }
@@ -142,5 +155,17 @@ async function syncCueMedia(
         await copyFile(path.join(derived, name), path.join(mediaPublic, name));
       }
     }
+  }
+
+  // Also sync image/audio assets that appear only via params.path on cues
+  for (const asset of edit.assets) {
+    if (asset.mediaKind !== "image" && asset.mediaKind !== "audio") continue;
+    const abs = path.isAbsolute(asset.path)
+      ? asset.path
+      : path.resolve(projectRootPath, asset.path);
+    if (!existsSync(abs)) continue;
+    const base = path.basename(abs);
+    await copyFile(abs, path.join(mediaPublic, base));
+    await copyFile(abs, path.join(mediaPublic, asset.id));
   }
 }

@@ -1,10 +1,13 @@
 import { z } from "zod";
 import { PlatformIdSchema, SlotNameSchema } from "./platforms";
 
+import { MediaKindSchema } from "./analysis";
+
 export const AssetSchema = z.object({
   id: z.string(),
   path: z.string(),
   durationSec: z.number().optional(),
+  mediaKind: MediaKindSchema.optional(),
 });
 
 export const TimelineClipSchema = z.object({

@@ -359,7 +359,19 @@ def run_vision(media: Path, asset_id: str, out_path: Path, sample_fps: float) ->
 
     cap = cv2.VideoCapture(str(media))
     if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video: {media}")
+        # Stills / audio-only / corrupt containers — don't abort the whole scan.
+        print(
+            f"WARN: Cannot open video for vision (writing empty): {media}",
+            file=sys.stderr,
+        )
+        out_path.write_text(
+            json.dumps(
+                {"assetId": asset_id, "fpsSampled": 0.0, "events": []},
+                indent=2,
+            )
+            + "\n"
+        )
+        return
 
     src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     step = max(1, int(round(src_fps / sample_fps)))
